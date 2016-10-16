@@ -1,0 +1,390 @@
+
+
+
+-- Create Database
+USE [master]
+GO
+
+CREATE DATABASE [dbUtilities]
+GO
+
+ALTER DATABASE [dbUtilities] SET COMPATIBILITY_LEVEL = 110
+GO
+
+ALTER DATABASE [dbUtilities] SET RECOVERY FULL 
+GO
+
+--Create Report Table
+
+CREATE TABLE [dbo].[Daily_Report](
+    [ReportRowID] [int] IDENTITY(1,1) NOT NULL,
+    [EventStatus] [varchar](50) NOT NULL,
+    [EventDate] [datetime] NOT NULL,
+    [EVENT] [varchar](2000) NOT NULL,
+ CONSTRAINT [PK_Daily_Report_ReportrowID] PRIMARY KEY CLUSTERED 
+    (
+    [ReportRowID]))
+
+
+-- Create Archive Table
+
+CREATE TABLE [dbo].[Daily_Report_Archive](
+    [ReportRowID] [int] NOT NULL,
+    [EventStatus] [varchar](50) NOT NULL,
+    [EventDate] [datetime] NULL,
+    [EVENT] [varchar](2000) NOT NULL,
+ CONSTRAINT [PK_Daily_Report_Archive_ReportrowID] PRIMARY KEY CLUSTERED 
+    (
+    [ReportRowID] ASC
+    )) ON [PRIMARY]
+
+
+-- Create Archive Proceudre
+
+CREATE PROCEDURE [dbo].[Archive_Daily_Report]
+AS
+    INSERT INTO Daily_Report_Archive
+    SELECT * FROM Daily_Report
+IF @@error = 0
+    BEGIN
+        Delete dbutility..Daily_Report
+    END
+
+-- Create File Growth Table
+
+CREATE TABLE [dbo].[File_growth](
+    [FileGrowthReadingID] [int] IDENTITY(1,1) NOT NULL,
+    [Physical_Name] [nvarchar](200) NOT NULL,
+    [Size_in_MB] [int] NULL,
+    [Reading_date] [datetime] NULL DEFAULT GetDate(),
+ CONSTRAINT [PK_FileGrowth_ReadingID] PRIMARY KEY CLUSTERED ([FileGrowthReadingID]))
+GO
+
+-- Create File growth gathering stored procedure
+
+CREATE PROCEDURE [dbo].[Get_File_growth]
+AS
+DECLARE @RETURN_VALUE int , @command1 nvarchar(1000)
+SET @command1 = 'Select 
+                Physical_name,
+                Size_in_MB = (size * 8 / 1024)
+                from ?.sys.database_files'
+
+INSERT INTO File_growth (Physical_Name, Size_in_MB)
+    EXEC @command1 = sp_MSforeachdb @command1 = @command1
+GO
+
+-- Create Free Disk Space Table
+
+CREATE TABLE [dbo].[Free_Drive_Space](
+    [DriveSpaceReadingID] [int] IDENTITY(1,1) NOT NULL,
+    [Drive] [char](1) NOT NULL,
+    [MBFree] [int] NOT NULL,
+    [ReadingDate] [datetime] NOT NULL,
+ CONSTRAINT [PK_Free_Drive_Space_ReadingID] PRIMARY KEY CLUSTERED 
+    ([DriveSpaceReadingID]))
+GO
+
+
+-- Capture Free disk space
+
+CREATE PROCEDURE [dbo].[Get_Drive_Space_Free]
+AS
+DECLARE @driveSpace TABLE (drive CHAR(2), MBFree int)
+    INSERT INTO @driveSpace
+        EXEC sp_executesql N'xp_fixeddrives'
+INSERT INTO [dbUtilities].[dbo].[Daily_Report]
+        SELECT 'Drive Space', GETDATE(), 'Free space on ' + drive + ' is ' + CONVERT (VARCHAR(20), MBFree/1024) + ' Gigs' 
+            FROM @driveSpace
+INSERT INTO [dbUtilities].[dbo].[Free_Drive_Space]
+        SELECT Drive, MBFree,GETDATE() 
+            FROM @driveSpace
+GO
+
+-- Create  Processors Table
+CREATE TABLE [dbo].[Processor_UTI](
+    [ProcessorReadingID] [int] IDENTITY(1,1) NOT NULL,
+    [ReadingDate] [datetime] NOT NULL,
+    [ProcessorUTI] [int] NOT NULL,
+ CONSTRAINT [PK_Processor_UTI_ID] PRIMARY KEY CLUSTERED 
+([ProcessorReadingID])) ON [PRIMARY]
+GO
+
+sp_configure 'show advanced options', 1;
+RECONFIGURE
+GO
+sp_configure 'clr enabled', 1;
+RECONFIGURE
+GO
+
+
+ALTER DATABASE dbUtilities SET TRUSTWORTHY ON;
+
+-- Create Assembly 
+-- The Dll is required
+
+CREATE ASSEMBLY [dbUtilities.Database.CLRFunctions]
+    FROM 'C:\Data\dbstats.Database.CLRFunctions .dll'
+WITH PERMISSION_SET = UNSAFE
+GO
+
+-- Create Function that calls the .dll
+
+CREATE FUNCTION [dbo].[GetCPUUTI]()
+    RETURNS [nchar](300) WITH EXECUTE AS CALLER
+AS 
+EXTERNAL NAME [dbUtilities.Database.CLRFunctions].[UserDefinedFunctions].[GetCPUUTI]
+GO
+
+-- Collect the data
+
+
+-- Filter Error Log Data for daily report
+
+CREATE PROCEDURE GetProcUTI
+AS
+Insert Into Processor_UTI (ReadingDate,ProcessorUTI)
+    Select Getdate(),Isnull(Round(dbo.getCPUUTI(), 0),0)
+GO
+
+Create Procedure [dbo].[Get_Filtered_Error_Log]
+AS
+    DECLARE @Errorlog TABLE (LogDate datetime, ProcessorInfo VARCHAR (100),ErrorMSG VARCHAR(2000))
+        INSERT INTO @Errorlog
+EXEC sp_executesql N'xp_readerrorlog'
+DELETE 
+    FROM @Errorlog 
+    WHERE ErrorMSG LIKE '%Log was backed up%'
+DELETE 
+    FROM @Errorlog 
+    WHERE ErrorMSG LIKE '%Setting database option COMPATIBILITY_LEVEL%'
+DELETE 
+    FROM @Errorlog 
+    WHERE ErrorMSG LIKE '%were backed up%'
+DELETE 
+    FROM @Errorlog 
+    WHERE ErrorMSG LIKE '%without errors%'
+INSERT INTO dbUtilities.dbo.Daily_Report
+    SELECT 'Error Log',Logdate,SUBSTRING(ErrorMSG, 1, 2000) 
+    FROM @Errorlog 
+    WHERE LogDate > DATEADD(dd, -1, GETDATE()) 
+GO
+
+-- Create Index fragmentation collection Table
+
+CREATE TABLE [dbo].[Index_Fragmentation](
+    [IndexFragID] [int] IDENTITY(1,1) NOT NULL,
+    [DatabaseName] [Sysname] NULL,
+    [OBjectName] [Sysname] NULL,
+    [IndexName] [Sysname] NULL,
+    [Index_Type] [nvarchar](120) NULL,
+    [Fragmentation] [float] NULL,
+    [ReadingDate] [datetime] NULL,
+ CONSTRAINT [PK_IndexFragID] PRIMARY KEY CLUSTERED 
+    ([IndexFragID]))
+GO
+
+-- Collect Index Fragmentation
+
+CREATE PROCEDURE Get_Index_Fragmentation
+AS
+DECLARE @objectID int
+DECLARE @IndexID int
+DECLARE @Index_Fragmentation TABLE ([DatabaseName] [Sysname], DB_ID int, [OBjectName] [Sysname], ObjectID int, [IndexName] [Sysname], IndexId int, [Index_Type] [nvarchar](120),[Fragmentation] [float])
+
+INSERT INTO @Index_Fragmentation ([DatabaseName], [DB_ID], [OBjectName], [ObjectID], [IndexName],  [IndexId], [Index_Type])
+    Select 
+        db_name(), db_ID(), object_schema_name(indexes.object_id) + '.' + object_name(indexes.object_id),OBJECT_ID, indexes.name, indexes.index_id, indexes.type_desc
+    FROM sys.indexes
+    Where object_schema_name(indexes.object_id) not like 'sys'
+
+DECLARE Get_Frag CURSOR FOR SELECT ObjectID, IndexID FROM @Index_Fragmentation;
+Open Get_Frag
+WHILE 1=1
+BEGIN
+    FETCH NEXT from Get_FRAG Into @OBJECTID, @INDEXID;
+    IF @@FETCH_STATUS < 0 BREAK
+    UPDATE @Index_Fragmentation
+        SET Fragmentation = avg_fragmentation_in_percent 
+            from sys.dm_db_index_physical_stats(db_id(),@ObjectID,@IndexID, null, null)
+    WHERE ObjectID = @ObjectID and IndexId = @IndexID
+END
+CLOSE Get_Frag
+DEALLOCATE Get_Frag
+
+INSERT INTO Index_Fragmentation 
+        ([DatabaseName], [OBjectName], [IndexName], [Index_Type], [Fragmentation], [ReadingDate])
+    Select [DatabaseName], [OBjectName], [IndexName], [Index_Type], [Fragmentation], GETDATE()
+    From @Index_Fragmentation
+GO
+
+
+-- Table that collects Procedure Execution Times
+
+CREATE TABLE [dbo].[Procedure_Execution_Times](
+    [ProcExecutionReadingID] [int] IDENTITY(1,1) NOT NULL,
+    [DatabaseName] [Sysname],
+    [SPName] [Sysname] NULL,
+    [ExeCount] [bigint] NULL,
+    [ExePerSec] [bigint] NULL,
+    [AvgWorkerTime] [bigint] NULL,
+    [TotalWorkerTime] [bigint] NULL,
+    [AvgElapsedTime] [bigint] NULL,
+    [MaxLogicalReads] [bigint] NULL,
+    [MaxLogicalWrites] [bigint] NULL,
+    [TotalPhysicalReads] [bigint] NULL,
+    [DateRecorded] [datetime] NULL,
+ CONSTRAINT [PK_Procedure_Execution_Times_ID] PRIMARY KEY CLUSTERED 
+    ([ProcExecutionReadingID]))
+GO
+
+-- Collect Execution Times
+
+CREATE PROCEDURE [dbo].[Get_Proc_Exection_Times]
+AS
+INSERT INTO dbUtilities..Procedure_Execution_Times 
+(DatabaseName,SPName, ExeCount, ExePerSec, AvgWorkerTime, TotalWorkerTime, AvgElapsedTime, MaxLogicalReads, MaxLogicalWrites, TotalPhysicalReads, DateRecorded)
+SELECT 
+    DB_Name() AS dbname,
+OBJECT_SCHEMA_NAME(qt.objectid, qt.dbid) + '.' + object_name(qt.objectid, qt.dbid) AS spname,
+    qs.execution_count AS 'Execution Count',  
+isnull(qs.execution_count,.0001)/Isnull(DATEDIFF(Second, qs.creation_time, GetDate()),.0001) AS 'Calls/Second',
+    isnull(qs.total_worker_time,1)/isnull(qs.execution_count,1) AS 'AvgWorkerTime',
+    qs.total_worker_time AS 'TotalWorkerTime',
+    isnull(qs.total_elapsed_time,1)/isnull(qs.execution_count,1) AS 'AvgElapsedTime',
+    qs.max_logical_reads, 
+    qs.max_logical_writes, 
+    qs.total_physical_reads,
+    GETDATE() AS RecordedDate
+FROM sys.dm_exec_query_stats AS qs
+        CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) AS qt
+ORDER BY qs.execution_count DESC
+GO
+
+
+-- Get a list of jobs that have failed for the daily report
+
+CREATE PROCEDURE Get_Failed_Jobs
+AS
+Insert Into Daily_Report 
+(EventStatus, EventDate, Event)
+    Select 
+    'Job Failed',
+    msdb.dbo.agent_datetime(sjh.run_date, sjh.run_time),
+    'SQL Server Job Failed ' + Name 
+    from msdb..sysjobs sj
+        Join msdb..sysjobhistory sjh 
+            on sj.job_id = sjh.job_id and sjh.run_status = 0
+    Where Enabled = 1 and step_id = 0
+    AND msdb.dbo.agent_datetime(sjh.run_date, sjh.run_time) > Dateadd(dd, -2,GetDate())
+GO
+
+
+---------------------------------------------------
+-- Only add if Reporting Services is installed.
+---------------------------------------------------
+-- Seprate Schemas to make the individual aspects easy to identified.
+
+CREATE Schema rpt
+GO
+
+-- Gather Report information insert into day report table
+
+CREATE PROCEDURE [rpt].[Get_Report_Stats]
+AS
+DECLARE @Last24hours int
+DECLARE @Reports TABLE (ItemPath VARCHAR(1000), UserName Varchar(100), ReportExecution int)
+
+SET @Last24hours = (SELECT COUNT(*) FROM ReportServer..ExecutionLog3
+                                WHERE TimeStart > DATEADD(dd, -1, GETDATE()))
+
+INSERT INTO @Reports
+        (ItemPath, UserName, ReportExecution)
+            SELECT TOP 10 
+                ItemPath, 
+                UserName, 
+                COUNT(*) AS 'ReportExecution' FROM ReportServer..ExecutionLog3
+            WHERE TimeStart > DATEADD(dd, -1, GETDATE())
+            GROUP BY ItemPath, UserName
+            ORDER BY COUNT(*) DESC
+            
+INSERT INTO [dbo].[Daily_Report]
+      (EventStatus, EventDate, EVENT )
+            SELECT 'Total Reports', GETDATE(), 'Total number of Reports Executed ' + CONVERT(VARCHAR(10), @Last24hours)
+
+INSERT INTO [dbo].[Daily_Report]
+      (EventStatus, EventDate, EVENT )
+            SELECT 'Top Reports', GETDATE(), ItemPath + ' ' + UserName + ' ' + CONVERT(VARCHAR(10),ReportExecution) 
+            FROM @Reports
+            Order by ReportExecution desc
+GO
+
+---------------------------------------------------
+-- Only add if Mirroring is Used.
+---------------------------------------------------
+
+-- Seprate Schemas to make the individual aspects easy to identified.
+
+CREATE Schema Mir
+GO
+
+-- Create table to collect mirror status
+
+CREATE TABLE [Mir].[MirrorLogging](
+    [MirrorLoggingID] [int] IDENTITY(1,1) NOT NULL,
+    [HostName] [sysname] NOT NULL,
+    [DatabaseName] [sysname] NOT NULL,
+    [MirrorDescription] [varchar](10) NOT NULL,
+    [ReadingDate] [datetime] DEFAULT getdate() NULL,
+ CONSTRAINT [PK_MirrorLoggingID] PRIMARY KEY CLUSTERED 
+([MirrorLoggingID]))
+GO
+
+-- Determine mirroring status
+
+CREATE PROCEDURE Mir.Log_Mirroring_Status
+AS
+Set NOCOUNT ON
+DECLARE @HostName SYSNAME
+DECLARE @dbname SYSNAME
+DECLARE @MirDesc VARCHAR(10)
+DECLARE @CurrentStatusID INT
+DECLARE dbname CURSOR FAST_FORWARD FOR 
+    SELECT 
+        CAST(SERVERPROPERTY ('MachineName') AS SYSNAME),
+        DB_NAME(database_id), 
+        Mirroring_Role_Desc
+    FROM sys.database_mirroring
+            WHERE mirroring_state is not null
+OPEN dbname
+WHILE 1=1
+BEGIN
+    FETCH NEXT from dbname Into @hostname, @dbname, @MirDesc;
+    IF @@FETCH_STATUS < 0 BREAK
+-- Valdiate a record is there for the database,  If not insert it.
+If Not Exists (Select HostName, DatabaseName From Mir.MirrorLogging
+            WHERE HostName like @HostName 
+            AND DatabaseName like @dbname)
+    Begin 
+        Insert Mir.MirrorLogging (HostName, DatabaseName, MirrorDescription)
+        VALUES (@HostName, @dbname, @MirDesc)
+    END
+-- Find the most recent status, if the status has changed
+-- Insert a new entry
+SET @CurrentStatusID = (Select Max(MirrorLoggingID) From Mir.MirrorLogging
+            WHERE HostName like @HostName 
+            AND DatabaseName like @dbname)
+IF @MirDesc not like (Select MirrorDescription from Mir.MirrorLogging
+            WHERE MirrorLoggingID = @CurrentStatusID)IF @MirDesc not like (Select MirrorDescription from Mir.MirrorLogging
+			WHERE HostName like @HostName 
+			AND DatabaseName like @dbname)
+        BEGIN
+        Insert Mir.MirrorLogging (HostName, DatabaseName, MirrorDescription)
+        VALUES (@HostName, @dbname, @MirDesc)
+        END
+END
+CLOSE dbname
+DEALLOCATE dbname
+GO
+
+

@@ -1,0 +1,1 @@
+To use the .dll for processor collection, the DBStats.Database.CLRFunction.smp should be renamed to a .dll before the CLR is registed with SQL Server.
