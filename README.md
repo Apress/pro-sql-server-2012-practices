@@ -1,4 +1,4 @@
-#Apress Source Code
+# Apress Source Code
 
 This repository accompanies [*Pro SQL Server 2012 Practices*](http://www.apress.com/9781430247708) by Chris Shaw, Grant Fritchey, Carlos Bossy, Jeremy Lowell, Gail Shaw, Jesper Johansen, Mladen Prajdi, Wendy Pastrick, Kellyn Pot'Vin, Jason Strate, Herve Roggero, TJay Belt, Jonathan Gardner, Glenn Berry, Bradley Ball, Jes Borland, Ben DeBow, and Louis Davidson (Apress, 2012).
 
@@ -6,10 +6,10 @@ This repository accompanies [*Pro SQL Server 2012 Practices*](http://www.apress.
 
 Download the files as a zip using the green button, or clone the repository to your machine using Git.
 
-##Releases
+## Releases
 
 Release v1.0 corresponds to the code in the published book, without corrections or updates.
 
-##Contributions
+## Contributions
 
 See the file Contributing.md for more information on how you can contribute to this repository.
